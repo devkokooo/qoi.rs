@@ -1,3 +1,5 @@
+use qoi_rs::QOI;
+
 fn main() {
-    println!("Hello, QOI!");
+    let pixels = QOI::decode("qoi_test_images/kodim23.qoi");
 }
