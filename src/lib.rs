@@ -39,7 +39,7 @@ impl fmt::Display for QOIError {
 impl std::error::Error for QOIError {}
 
 #[derive(Copy, Clone)]
-struct Pixel {
+pub struct Pixel {
     red: u8,
     green: u8,
     blue: u8,
@@ -47,7 +47,14 @@ struct Pixel {
 }
 
 impl QOI {
-    pub fn decode(path: &str) -> Result<Vec<u8>, QOIError> {
+    /// Step-by-step decoding process:
+    /// 1. Read data from .qoi file
+    /// 2. Extract and validate header
+    /// 3. Parse data chunks
+    /// 4. Convert data chunks into pixel values
+    /// 5. Populate raw pixel vector
+    /// 6. Return raw pixels 
+    pub fn decode(path: &str) -> Result<Vec<Pixel>, QOIError> {
         let data = fs::read(path)?;
 
         let QOIHeader {
@@ -57,19 +64,27 @@ impl QOI {
         // write chunks to file to review
         let mut file = File::create("chunks.txt")?;
 
-        writeln!(file, "[QOI Header] Extracted...")?;
-        let formatted_header = format!(
-            "width: {width}, height: {height}\nchannels: {channels}, colorspace: {colorspace}"
-        );
-        writeln!(file, "{formatted_header}")?;
+        let total_pixels = (width * height) as u64;
 
-        let mut prev_pixels: [Pixel; 64] = [Pixel {
+        writeln!(file, "[QOI Header] Extracted...")?;
+        writeln!(
+            file,
+            "width: {width}, height: {height}\nchannels: {channels}, colorspace: {colorspace}\ntotal pixels: {total_pixels}"
+        )?;
+
+        let mut seen_pixels: [Pixel; 64] = [Pixel {
             red: 0, green: 0, blue: 0, alpha: 255
         }; 64];
+
+        let mut prev_pixel = Pixel {
+            red: 0, green: 0, blue: 0, alpha: 255,
+        };
 
         // Start parsing each of the possible QOI chunks
         let chunks = &data[14..];
         let mut chunks = chunks.iter();
+
+        let mut raw_pixels: Vec<Pixel> = Vec::new();
 
         while let Some(chunk) = chunks.next() {
             // RGB and RGBA chunks takes precedence first
@@ -85,10 +100,15 @@ impl QOI {
                     alpha: 255
                 };
                 let index = QOI::hash_index(&pixel);
-                prev_pixels[index as usize] = pixel;
+                seen_pixels[index as usize] = pixel;
+                prev_pixel = pixel;
+                
+                writeln!(
+                    file,
+                    "RGB [{}, {}, {}]", *red, *green, *blue
+                )?;
 
-                let formatted = format!("RGB [{}, {}, {}] ", *red, *green, *blue);
-                writeln!(file, "{formatted}")?;
+                raw_pixels.push(pixel);
             }
             else if channels == 4 && *chunk == 0b1111_1111 {
                 let red = chunks.next().unwrap();
@@ -103,60 +123,127 @@ impl QOI {
                     alpha: *alpha,
                 };
                 let index = QOI::hash_index(&pixel);
-                prev_pixels[index as usize] = pixel;
+                seen_pixels[index as usize] = pixel;
+                prev_pixel = pixel;
+                
+                writeln!(
+                    file,
+                    "RGBA [{}, {}, {}, {}]", *red, *green, *blue, *alpha
+                )?;
 
-                let formatted = format!("RGBA [{}, {}, {}, {}] ", *red, *green, *blue, *alpha);
-                writeln!(file, "{formatted}")?;
+                raw_pixels.push(pixel);
             }
             else {
                 // THEN start parsing chunks for RUN, INDEX, DIFF, LUMA
                 let tag = *chunk >> 6;
                 let data = *chunk & 0b0011_1111;
 
-                let formatted = format!("({:02b} {:06b}) ", tag, data);
-                write!(file, "{formatted}")?;
+                write!(file, "({:02b} {:06b}) ", tag, data)?;
 
+                // INDEX chunk
+                // When we find it, use the index to get pixel data from prev pixel array
                 if tag == 0b00 {
-                    let formatted = format!("INDEX {data}");
-                    writeln!(file, "{formatted}")?;
+                    let index = data;
+                    let prev = seen_pixels[index as usize];
+                    prev_pixel = prev;
+                    let Pixel { red, green, blue, alpha } = prev;
+
+                    writeln!(file, "INDEX {index} ➜ Pixel [{red}, {green}, {blue}, {alpha}]")?;
+
+                    raw_pixels.push(prev)
                 }
+                // DIFF chunk
                 else if tag == 0b01 {
-                    let bias = 2;
-                    let diff_red = (data >> 4) & 0b11;
-                    let diff_green = (data >> 2) & 0b11;
-                    let diff_blue = data & 0b11;
+                    let bias: i16 = 2;
+                    let diff_red = ((data >> 4) & 0b11) as i16;
+                    let diff_green = ((data >> 2) & 0b11) as i16;
+                    let diff_blue = (data & 0b11) as i16;
 
-                    // TODO: handle wraparound (i.e. 0 - 2 = 254), at the pixel level
-                    // let dr = diff_red - bias;
-                    // let dg = diff_green - bias;
-                    // let db = diff_blue - bias;
+                    let dr = diff_red - bias;
+                    let dg = diff_green - bias;
+                    let db = diff_blue - bias;
 
-                    let formatted = format!("DIFF [{diff_red}, {diff_green}, {diff_blue}]");
-                    writeln!(file, "{formatted}")?;
+                    let Pixel { red, green, blue, alpha } = prev_pixel;
+                    let red = red as i16;
+                    let green = green as i16;
+                    let blue = blue as i16;
+
+                    let wrap_dr = QOI::wraparound_u8(red, dr);
+                    let wrap_dg = QOI::wraparound_u8(green, dg);
+                    let wrap_db = QOI::wraparound_u8(blue, db);
+
+                    let diff_pixel = Pixel {
+                        red: wrap_dr as u8,
+                        green: wrap_dg as u8,
+                        blue: wrap_db as u8,
+                        alpha
+                    };
+                    prev_pixel = diff_pixel;
+                    
+                    writeln!(
+                        file,
+                        "DIFF [{dr}, {dg}, {db}] ➜ Pixel [{red} ({wrap_dr}), {green} ({wrap_dg}), {blue} ({wrap_db}), {alpha}]"
+                    )?;
+
+                    raw_pixels.push(diff_pixel);
                 }
                 // LUMA has 2 bytes of data
                 else if tag == 0b10 {
                     let next_byte = chunks.next().unwrap();
 
+                    let bias_green: i16 = 32;
+                    let bias_rb: i16 = 8;
+
                     let dg = data >> 2; // 6 bits
                     let dr_dg = next_byte >> 4; // 4 bits
                     let db_dg = next_byte & 0b1111; // 4 bits
 
-                    let formatted_byte = format!("LUMA [{dg}, {dr_dg}, {db_dg}]");
-                    writeln!(file, "{formatted_byte}")?;
+                    let dg = dg as i16 - bias_green;
+                    let dr_dg = dr_dg as i16 - bias_rb;
+                    let db_dg = db_dg as i16 - bias_rb;
+
+                    let Pixel { red, green, blue, alpha } = prev_pixel;
+                    let red = red as i16;
+                    let green = green as i16;
+                    let blue = blue as i16;
+
+                    let wrap_dg = QOI::wraparound_u8(green, dg);
+                    let wrap_dr = QOI::wraparound_u8(red, dr_dg + dg);
+                    let wrap_db = QOI::wraparound_u8(blue, db_dg + dg);
+
+                    let luma_pixel = Pixel {
+                        red: wrap_dr as u8,
+                        green: wrap_dg as u8,
+                        blue: wrap_db as u8,
+                        alpha
+                    };
+                    prev_pixel = luma_pixel;
+
+                    writeln!(
+                        file,
+                        "LUMA [{dg}, {dr_dg}, {db_dg}] ➜ Pixel [{red} ({wrap_dr}), {green} ({wrap_dg}), {blue} ({wrap_db}), {alpha}]"
+                    )?;
+
+                    raw_pixels.push(luma_pixel);
                 }
+                // RUN chunk for run-length encoding
+                // repeat the previously seen pixel X amount of times
                 else if tag == 0b11 {
                     let bias = -1;
                     let actual = data as i16 - bias;
 
-                    let formatted = format!("RUN {actual}");
-                    writeln!(file, "{formatted}")?;
+                    let Pixel { red, green, blue, alpha } = prev_pixel;
+                    writeln!(file, "RUN {actual} ➜ prev Pixel [{red}, {green}, {blue}, {alpha}]")?;
+
+                    for _ in 0..actual {
+                        raw_pixels.push(prev_pixel);
+                    }
                 }
             }
 
         }
 
-        todo!()
+        Ok(raw_pixels)
     }
 
     fn hash_index(pixel: &Pixel) -> u8 {
@@ -167,6 +254,17 @@ impl QOI {
 
         let hash = (red * 3 + green * 5 + blue * 7 + alpha * 9) % 64;
         hash as u8
+    }
+
+    // 255 + 1 = 0
+    // 0 - 1 = 255
+    // 0 - 2 = 254
+    fn wraparound_u8(val: i16, diff: i16) -> i16 {
+        let res = val + diff;
+
+        if res < 0 { res + 256 }
+        else if res > 255 { res - 256 }
+        else { res }
     }
 
     // Read the header byte-by-byte (every u8)

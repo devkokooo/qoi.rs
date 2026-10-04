@@ -1,5 +1,8 @@
 use qoi_rs::QOI;
 
 fn main() {
-    let pixels = QOI::decode("qoi_test_images/kodim23.qoi");
+    if let Ok(pixels) = QOI::decode("qoi_test_images/dice.qoi") {
+        let len = pixels.len();
+        println!("Total size of raw pixels: {len}");
+    }
 }
