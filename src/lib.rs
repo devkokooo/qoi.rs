@@ -4,11 +4,11 @@ use std::io::{self, Write};
 pub struct QOI;
 
 #[derive(Debug)]
-struct QOIHeader {
-    width: u32,
-    height: u32,
-    channels: u8,
-    colorspace: u8
+pub struct QOIHeader {
+    pub width: u32,
+    pub height: u32,
+    pub channels: u8,
+    pub colorspace: u8
 }
 
 #[derive(Debug)]
@@ -48,12 +48,26 @@ pub enum QoiOp {
     RUN,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Pixel {
-    red: u8,
-    green: u8,
-    blue: u8,
-    alpha: u8,
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub alpha: u8,
+}
+
+impl Pixel {
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        Self {
+            red: 0, green: 0, blue: 0, alpha: 0
+        }
+    }
+}
+
+pub struct DecodedImage {
+    pub header: QOIHeader,
+    pub raw_pixels: Vec<Pixel>,
 }
 
 impl QOI {
@@ -64,27 +78,16 @@ impl QOI {
     /// 4. Convert data chunks into pixel values
     /// 5. Populate raw pixel vector
     /// 6. Return raw pixels 
-    pub fn decode(path: &str) -> Result<Vec<Pixel>, QOIError> {
+    pub fn decode(path: &str) -> Result<DecodedImage, QOIError> {
         let data = fs::read(path)?;
 
-        let QOIHeader {
+        let header @ QOIHeader {
             width, height, channels, colorspace
         } = Self::extract_header(&data[..14])?;
 
-        // write chunks to file to review
-        let mut file = File::create("chunks.txt")?;
-
         let total_pixels = (width * height) as u64;
 
-        writeln!(file, "[QOI Header] Extracted...")?;
-        writeln!(
-            file,
-            "width: {width}, height: {height}\nchannels: {channels}, colorspace: {colorspace}\ntotal pixels: {total_pixels}"
-        )?;
-
-        let mut seen_pixels: [Pixel; 64] = [Pixel {
-            red: 0, green: 0, blue: 0, alpha: 255
-        }; 64];
+        let mut seen_pixels: [Pixel; 64] = [Pixel::zeroed(); 64];
 
         let mut prev_pixel = Pixel {
             red: 0, green: 0, blue: 0, alpha: 255,
@@ -104,24 +107,15 @@ impl QOI {
 
             let tag = QOI::parse_tag(*byte);
 
-            match tag {
+            let curr_pixel = match tag {
                 QoiOp::RGB => {
                     let pixel = Pixel {
                         red: *chunks.next().ok_or(QOIError::MalformedFile)?,
                         green: *chunks.next().ok_or(QOIError::MalformedFile)?,
                         blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        alpha: 255
+                        alpha: prev_pixel.alpha,
                     };
-                    let index = QOI::hash_index(&pixel);
-                    seen_pixels[index as usize] = pixel;
-                    prev_pixel = pixel;
-                    
-                    writeln!(
-                        file,
-                        "RGB [{}, {}, {}]", pixel.red, pixel.green, pixel.blue
-                    )?;
-
-                    raw_pixels.push(pixel);
+                    pixel
                 }
                 QoiOp::RGBA => {
                     let pixel = Pixel {
@@ -130,128 +124,39 @@ impl QOI {
                         blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
                         alpha: *chunks.next().ok_or(QOIError::MalformedFile)?,
                     };
-                    let index = QOI::hash_index(&pixel);
-                    seen_pixels[index as usize] = pixel;
-                    prev_pixel = pixel;
-
-                    writeln!(
-                        file,
-                        "RGBA [{}, {}, {}, {}]", pixel.red, pixel.green, pixel.blue, pixel.alpha
-                    )?;
-
-                    raw_pixels.push(pixel);
+                    pixel
                 }
                 QoiOp::INDEX => {
-                    let data = *byte & 0b0011_1111;
-                    write!(file, "({:06b}) ", data)?;
-
-                    let index = data;
-                    let prev = seen_pixels[index as usize];
-                    prev_pixel = prev;
-                    let Pixel { red, green, blue, alpha } = prev;
-
-                    writeln!(file, "INDEX {index} ➜ Pixel [{red}, {green}, {blue}, {alpha}]")?;
-
-                    raw_pixels.push(prev)
-
+                    let index = *byte & 0b0011_1111;
+                    let seen = seen_pixels[index as usize];
+                    seen
                 }
                 QoiOp::DIFF => {
-                    let data = *byte & 0b0011_1111;
-                    write!(file, "({:06b}) ", data)?;
-
-                    let bias: i16 = 2;
-                    let diff_red = ((data >> 4) & 0b11) as i16;
-                    let diff_green = ((data >> 2) & 0b11) as i16;
-                    let diff_blue = (data & 0b11) as i16;
-
-                    let dr = diff_red - bias;
-                    let dg = diff_green - bias;
-                    let db = diff_blue - bias;
-
-                    let Pixel { red, green, blue, alpha } = prev_pixel;
-                    let red = red as i16;
-                    let green = green as i16;
-                    let blue = blue as i16;
-
-                    let wrap_dr = QOI::wraparound_u8(red, dr);
-                    let wrap_dg = QOI::wraparound_u8(green, dg);
-                    let wrap_db = QOI::wraparound_u8(blue, db);
-
-                    let diff_pixel = Pixel {
-                        red: wrap_dr as u8,
-                        green: wrap_dg as u8,
-                        blue: wrap_db as u8,
-                        alpha
-                    };
-                    prev_pixel = diff_pixel;
-                    
-                    writeln!(
-                        file,
-                        "DIFF [{dr}, {dg}, {db}] ➜ Pixel [{red} ({wrap_dr}), {green} ({wrap_dg}), {blue} ({wrap_db}), {alpha}]"
-                    )?;
-
-                    raw_pixels.push(diff_pixel);
-
+                    QOI::extract_pixel_from_diff_chunk(*byte, prev_pixel)
                 }
                 QoiOp::LUMA => {
-                    let data = *byte & 0b0011_1111;
-                    write!(file, "({:06b}) ", data)?;
-
                     let next_byte = chunks.next().unwrap();
 
-                    let bias_green: i16 = 32;
-                    let bias_rb: i16 = 8;
-
-                    let dg = data >> 2; // 6 bits
-                    let dr_dg = next_byte >> 4; // 4 bits
-                    let db_dg = next_byte & 0b1111; // 4 bits
-
-                    let dg = dg as i16 - bias_green;
-                    let dr_dg = dr_dg as i16 - bias_rb;
-                    let db_dg = db_dg as i16 - bias_rb;
-
-                    let Pixel { red, green, blue, alpha } = prev_pixel;
-                    let red = red as i16;
-                    let green = green as i16;
-                    let blue = blue as i16;
-
-                    let wrap_dg = QOI::wraparound_u8(green, dg);
-                    let wrap_dr = QOI::wraparound_u8(red, dr_dg + dg);
-                    let wrap_db = QOI::wraparound_u8(blue, db_dg + dg);
-
-                    let luma_pixel = Pixel {
-                        red: wrap_dr as u8,
-                        green: wrap_dg as u8,
-                        blue: wrap_db as u8,
-                        alpha
-                    };
-                    prev_pixel = luma_pixel;
-
-                    writeln!(
-                        file,
-                        "LUMA [{dg}, {dr_dg}, {db_dg}] ➜ Pixel [{red} ({wrap_dr}), {green} ({wrap_dg}), {blue} ({wrap_db}), {alpha}]"
-                    )?;
-
-                    raw_pixels.push(luma_pixel);
+                    QOI::extract_pixel_from_luma_chunk(*byte, *next_byte, prev_pixel)
                 }
                 QoiOp::RUN => {
                     let data = *byte & 0b0011_1111;
-                    write!(file, "({:06b}) ", data)?;
+                    let actual = data.wrapping_add(1);
 
-                    let bias = -1;
-                    let actual = data as i16 - bias;
-
-                    let Pixel { red, green, blue, alpha } = prev_pixel;
-                    writeln!(file, "RUN {actual} ➜ prev Pixel [{red}, {green}, {blue}, {alpha}]")?;
-
-                    for _ in 0..actual {
+                    for _ in 0..actual - 1 {
                         raw_pixels.push(prev_pixel);
                     }
+                    prev_pixel
                 }
-            }
+            };
+            let index = QOI::hash_index(&curr_pixel);
+            seen_pixels[index as usize] = curr_pixel;
+            prev_pixel = curr_pixel;
+
+            raw_pixels.push(curr_pixel);
         }
 
-        Ok(raw_pixels)
+        Ok(DecodedImage { header, raw_pixels })
     }
 
     /// Parses encoded byte into the proper chunk type
@@ -274,6 +179,57 @@ impl QOI {
         }
     }
 
+    fn extract_pixel_from_diff_chunk(curr_byte: u8, prev_pixel: Pixel) -> Pixel {
+        let bias = 2;
+        let diff_red = (curr_byte >> 4) & 0b11;
+        let diff_green = (curr_byte >> 2) & 0b11;
+        let diff_blue = curr_byte & 0b11;
+
+        let dr = diff_red.wrapping_sub(bias);
+        let dg = diff_green.wrapping_sub(bias);
+        let db = diff_blue.wrapping_sub(bias);
+
+        let Pixel { red, green, blue, alpha } = prev_pixel;
+        let curr_red = dr.wrapping_add(red);
+        let curr_green = dg.wrapping_add(green);
+        let curr_blue = db.wrapping_add(blue);
+
+        let diff_pixel = Pixel {
+            red: curr_red,
+            green: curr_green,
+            blue: curr_blue,
+            alpha
+        };
+        diff_pixel
+    }
+
+    fn extract_pixel_from_luma_chunk(first_byte: u8, second_byte: u8, prev_pixel: Pixel) -> Pixel {
+        let bias_green = 32;
+        let bias_rb = 8;
+
+        let dg = first_byte & 0b0011_1111; // 6 bits
+        let dr_dg = second_byte >> 4; // 4 bits
+        let db_dg = second_byte & 0b1111; // 4 bits
+
+        let dg = dg.wrapping_sub(bias_green);
+        let dr_dg = dr_dg.wrapping_sub(bias_rb);
+        let db_dg = db_dg.wrapping_sub(bias_rb);
+
+        let Pixel { red, green, blue, alpha } = prev_pixel;
+
+        let curr_green = dg.wrapping_add(green);
+        let curr_red = dr_dg.wrapping_add(dg).wrapping_add(red);
+        let curr_blue = db_dg.wrapping_add(dg).wrapping_add(blue);
+
+        let luma_pixel = Pixel {
+            red: curr_red,
+            green: curr_green,
+            blue: curr_blue,
+            alpha
+        };
+        luma_pixel
+    }
+
     fn hash_index(pixel: &Pixel) -> u8 {
         let red = pixel.red as u16;
         let green = pixel.green as u16;
@@ -282,17 +238,6 @@ impl QOI {
 
         let hash = (red * 3 + green * 5 + blue * 7 + alpha * 9) % 64;
         hash as u8
-    }
-
-    // 255 + 1 = 0
-    // 0 - 1 = 255
-    // 0 - 2 = 254
-    fn wraparound_u8(val: i16, diff: i16) -> i16 {
-        let res = val + diff;
-
-        if res < 0 { res + 256 }
-        else if res > 255 { res - 256 }
-        else { res }
     }
 
     // Read the header byte-by-byte (every u8)
@@ -422,6 +367,88 @@ mod tests {
                 actual, expected,
                 "case failed for {byte:?}"
             );
+        }
+    }
+
+    #[test]
+    fn diff_chunk_extract_pixel() {
+        let cases = [
+            (
+                0b0110_1010_u8, // DIFF [2-2 = 0, 2-2 = 0, 2-2 = 0]
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+            ),
+            (
+                0b0111_1111_u8, // DIFF [3-2 = 1, 3-2 = 1, 3-2 = 1]
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 1, green: 1, blue: 1, alpha: 255 },
+            ),
+            (
+                0b0101_0101_u8, // DIFF [1-2 = -1, 1-2 = -1, 1-2 = -1]
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 255, green: 255, blue: 255, alpha: 255 },
+            ),
+            (
+                0b0100_0000_u8, // DIFF [0-2 = -2, 0-2 = -2, 0-2 = -2]
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 254, green: 254, blue: 254, alpha: 255 },
+            ),
+            (
+                0b0101_1011_u8, // DIFF [1-2 = -1, 2-2 = 0, 3-2 = 1]
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 255, green: 0, blue: 1, alpha: 255 },
+            ),
+        ];
+
+        for (byte, prev, expected) in cases {
+            let res = QOI::extract_pixel_from_diff_chunk(byte, prev);
+
+            assert_eq!(res, expected);
+        }
+    }
+
+    #[test]
+    fn luma_chunk_extract_pixel() {
+        // curr_red = dr_dg + dg + prev_red
+        // curr_blue = db_dg + dg + prev_blue
+        // curr_green = dg + prev_green
+        let cases = [
+            (
+                0b1010_0000_u8, // LUMA [32-32 = 0, 8-8 = 0, 8-8 = 0]
+                0b1000_1000_u8,
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+            ),
+            (
+                0b1000_0000_u8, // LUMA [0-32 = -32, 8-8 = 0, 8-8 = 0]
+                0b1000_1000_u8,
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 224, green: 224, blue: 224, alpha: 255 },
+            ),
+            (
+                0b1011_1111_u8, // LUMA [63-32 = 31, 8-8 = 0, 8-8 = 0]
+                0b1000_1000_u8,
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 31, green: 31, blue: 31, alpha: 255 },
+            ),
+            (
+                0b1001_1111_u8, // LUMA [31-32 = -1, 8-8 = 0, 9-8 = 1]
+                0b1000_1001_u8,
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 255, green: 255, blue: 0, alpha: 255 },
+            ),
+            (
+                0b1001_1111_u8, // LUMA [31-32 = -1, 7-8 = -1, 9-8 = 1]
+                0b0111_1001_u8,
+                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel { red: 254, green: 255, blue: 0, alpha: 255 },
+            ),
+        ];
+
+        for (byte1, byte2, prev, expected) in cases {
+            let res = QOI::extract_pixel_from_luma_chunk(byte1, byte2, prev);
+
+            assert_eq!(res, expected);
         }
     }
 }
