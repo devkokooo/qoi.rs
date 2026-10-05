@@ -39,18 +39,13 @@ impl fmt::Display for QOIError {
 impl std::error::Error for QOIError {}
 
 #[derive(Debug, PartialEq)]
-pub enum QOI_OP {
+pub enum QoiOp {
     RGB,
     RGBA,
     INDEX,
     DIFF,
     LUMA,
     RUN,
-}
-
-struct DecodedChunk {
-    chunk_type: QOI_OP,
-    pixel: Pixel,
 }
 
 #[derive(Copy, Clone)]
@@ -102,18 +97,19 @@ impl QOI {
         let mut raw_pixels: Vec<Pixel> = Vec::new();
 
         while let Some(byte) = chunks.next() {
+            // last 8 bytes of byte stream are just end markers
+            if total_pixels == raw_pixels.len() as u64 {
+                break;
+            }
+
             let tag = QOI::parse_tag(*byte);
 
             match tag {
-                QOI_OP::RGB => {
-                    let red = chunks.next().unwrap();
-                    let green = chunks.next().unwrap();
-                    let blue = chunks.next().unwrap();
-
+                QoiOp::RGB => {
                     let pixel = Pixel {
-                        red: *red,
-                        green: *green,
-                        blue: *blue,
+                        red: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                        green: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                        blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
                         alpha: 255
                     };
                     let index = QOI::hash_index(&pixel);
@@ -122,35 +118,30 @@ impl QOI {
                     
                     writeln!(
                         file,
-                        "RGB [{}, {}, {}]", *red, *green, *blue
+                        "RGB [{}, {}, {}]", pixel.red, pixel.green, pixel.blue
                     )?;
 
                     raw_pixels.push(pixel);
                 }
-                QOI_OP::RGBA => {
-                    let red = chunks.next().unwrap();
-                    let green = chunks.next().unwrap();
-                    let blue = chunks.next().unwrap();
-                    let alpha = chunks.next().unwrap();
-
+                QoiOp::RGBA => {
                     let pixel = Pixel {
-                        red: *red,
-                        green: *green,
-                        blue: *blue,
-                        alpha: *alpha,
+                        red: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                        green: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                        blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                        alpha: *chunks.next().ok_or(QOIError::MalformedFile)?,
                     };
                     let index = QOI::hash_index(&pixel);
                     seen_pixels[index as usize] = pixel;
                     prev_pixel = pixel;
-                    
+
                     writeln!(
                         file,
-                        "RGBA [{}, {}, {}, {}]", *red, *green, *blue, *alpha
+                        "RGBA [{}, {}, {}, {}]", pixel.red, pixel.green, pixel.blue, pixel.alpha
                     )?;
 
                     raw_pixels.push(pixel);
                 }
-                QOI_OP::INDEX => {
+                QoiOp::INDEX => {
                     let data = *byte & 0b0011_1111;
                     write!(file, "({:06b}) ", data)?;
 
@@ -164,7 +155,7 @@ impl QOI {
                     raw_pixels.push(prev)
 
                 }
-                QOI_OP::DIFF => {
+                QoiOp::DIFF => {
                     let data = *byte & 0b0011_1111;
                     write!(file, "({:06b}) ", data)?;
 
@@ -202,7 +193,7 @@ impl QOI {
                     raw_pixels.push(diff_pixel);
 
                 }
-                QOI_OP::LUMA => {
+                QoiOp::LUMA => {
                     let data = *byte & 0b0011_1111;
                     write!(file, "({:06b}) ", data)?;
 
@@ -243,7 +234,7 @@ impl QOI {
 
                     raw_pixels.push(luma_pixel);
                 }
-                QOI_OP::RUN => {
+                QoiOp::RUN => {
                     let data = *byte & 0b0011_1111;
                     write!(file, "({:06b}) ", data)?;
 
@@ -264,19 +255,19 @@ impl QOI {
     }
 
     /// Parses encoded byte into the proper chunk type
-    fn parse_tag(byte: u8) -> QOI_OP {
+    fn parse_tag(byte: u8) -> QoiOp {
         match byte {
             // RGB and RGBA chunks takes precedence first
-            0b1111_1110 => QOI_OP::RGB,
-            0b1111_1111 => QOI_OP::RGBA,
+            0b1111_1110 => QoiOp::RGB,
+            0b1111_1111 => QoiOp::RGBA,
             _ => {
                 let tag = byte >> 6;
 
                 match tag {
-                    0b00 => QOI_OP::INDEX,
-                    0b01 => QOI_OP::DIFF,
-                    0b10 => QOI_OP::LUMA,
-                    0b11 => QOI_OP::RUN,
+                    0b00 => QoiOp::INDEX,
+                    0b01 => QoiOp::DIFF,
+                    0b10 => QoiOp::LUMA,
+                    0b11 => QoiOp::RUN,
                     _ => unreachable!(),
                 }
             },
@@ -416,12 +407,12 @@ mod tests {
     #[test]
     fn chunk_tags_should_be_parsed_correctly() {
         let cases = [
-            (0b1111_1110 as u8, QOI_OP::RGB),
-            (0b1111_1111, QOI_OP::RGBA),
-            (0b0000_0001, QOI_OP::INDEX),
-            (0b0100_0001, QOI_OP::DIFF),
-            (0b1000_0001, QOI_OP::LUMA),
-            (0b1100_0001, QOI_OP::RUN),
+            (0b1111_1110 as u8, QoiOp::RGB),
+            (0b1111_1111, QoiOp::RGBA),
+            (0b0000_0001, QoiOp::INDEX),
+            (0b0100_0001, QoiOp::DIFF),
+            (0b1000_0001, QoiOp::LUMA),
+            (0b1100_0001, QoiOp::RUN),
         ];
 
         for (byte, expected) in cases {
