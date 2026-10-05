@@ -1,4 +1,4 @@
-use std::{fmt, fs::{self, File}};
+use std::{fmt, fs::{self, File}, num::Wrapping, path::Path};
 use std::io::{self, Write};
 
 pub struct QOI;
@@ -63,6 +63,20 @@ impl Pixel {
             red: 0, green: 0, blue: 0, alpha: 0
         }
     }
+
+    #[must_use]
+    pub const fn black() -> Self {
+        Self {
+            red: 0, green: 0, blue: 0, alpha: 255,
+        }
+    }
+
+    #[must_use]
+    pub const fn white() -> Self {
+        Self {
+            red: 255, green: 255, blue: 255, alpha: 255,
+        }
+    }
 }
 
 pub struct DecodedImage {
@@ -78,7 +92,7 @@ impl QOI {
     /// 4. Convert data chunks into pixel values
     /// 5. Populate raw pixel vector
     /// 6. Return raw pixels 
-    pub fn decode(path: &str) -> Result<DecodedImage, QOIError> {
+    pub fn decode(path: impl AsRef<Path>) -> Result<DecodedImage, QOIError> {
         let data = fs::read(path)?;
 
         let header @ QOIHeader {
@@ -143,7 +157,7 @@ impl QOI {
                     let data = *byte & 0b0011_1111;
                     let actual = data.wrapping_add(1);
 
-                    for _ in 0..actual - 1 {
+                    for _ in 0..actual {
                         raw_pixels.push(prev_pixel);
                     }
                     prev_pixel
@@ -153,7 +167,9 @@ impl QOI {
             seen_pixels[index as usize] = curr_pixel;
             prev_pixel = curr_pixel;
 
-            raw_pixels.push(curr_pixel);
+            if tag != QoiOp::RUN {
+                raw_pixels.push(curr_pixel);
+            }
         }
 
         Ok(DecodedImage { header, raw_pixels })
@@ -231,13 +247,21 @@ impl QOI {
     }
 
     fn hash_index(pixel: &Pixel) -> u8 {
-        let red = pixel.red as u16;
-        let green = pixel.green as u16;
-        let blue = pixel.blue as u16;
-        let alpha = pixel.alpha as u16;
+        let Pixel { red, green, blue, alpha } = pixel;
 
-        let hash = (red * 3 + green * 5 + blue * 7 + alpha * 9) % 64;
-        hash as u8
+        let red = Wrapping(*red);
+        let green = Wrapping(*green);
+        let blue = Wrapping(*blue);
+        let alpha = Wrapping(*alpha);
+
+        let hash = (
+            red * Wrapping(3) +
+            green * Wrapping(5) +
+            blue * Wrapping(7) +
+            alpha * Wrapping(11)
+        ).0 % 64;
+
+        hash
     }
 
     // Read the header byte-by-byte (every u8)

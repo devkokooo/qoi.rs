@@ -1,10 +1,22 @@
+use std::path::PathBuf;
+
+use clap::Parser;
+
 use qoi_rs::QOI;
 use image;
 
-fn main() {
-    let path = "qoi_test_images/dice.qoi";
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// The .qoi file path to decode, relative to cwd
+    #[arg(short, long, default_value = "qoi_test_images/dice.qoi")]
+    file_name: PathBuf,
+}
 
-    if let Ok(decoded) = QOI::decode(path) {
+fn main() {
+    let Args { file_name } = Args::parse();
+
+    if let Ok(decoded) = QOI::decode(file_name) {
         let len = decoded.raw_pixels.len();
         println!("Total raw pixels: {len}");
 
