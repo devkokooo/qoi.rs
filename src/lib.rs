@@ -38,6 +38,21 @@ impl fmt::Display for QOIError {
 
 impl std::error::Error for QOIError {}
 
+#[derive(Debug, PartialEq)]
+pub enum QOI_OP {
+    RGB,
+    RGBA,
+    INDEX,
+    DIFF,
+    LUMA,
+    RUN,
+}
+
+struct DecodedChunk {
+    chunk_type: QOI_OP,
+    pixel: Pixel,
+}
+
 #[derive(Copy, Clone)]
 pub struct Pixel {
     red: u8,
@@ -87,8 +102,9 @@ impl QOI {
         let mut raw_pixels: Vec<Pixel> = Vec::new();
 
         while let Some(chunk) = chunks.next() {
-            // RGB and RGBA chunks takes precedence first
-            if channels == 3 && *chunk == 0b1111_1110 {
+            let tag = QOI::parse_tag(*chunk);
+
+            if tag == QOI_OP::RGB {
                 let red = chunks.next().unwrap();
                 let green = chunks.next().unwrap();
                 let blue = chunks.next().unwrap();
@@ -110,7 +126,7 @@ impl QOI {
 
                 raw_pixels.push(pixel);
             }
-            else if channels == 4 && *chunk == 0b1111_1111 {
+            else if tag == QOI_OP::RGBA {
                 let red = chunks.next().unwrap();
                 let green = chunks.next().unwrap();
                 let blue = chunks.next().unwrap();
@@ -135,14 +151,12 @@ impl QOI {
             }
             else {
                 // THEN start parsing chunks for RUN, INDEX, DIFF, LUMA
-                let tag = *chunk >> 6;
                 let data = *chunk & 0b0011_1111;
 
-                write!(file, "({:02b} {:06b}) ", tag, data)?;
+                write!(file, "({:06b}) ", data)?;
 
-                // INDEX chunk
                 // When we find it, use the index to get pixel data from prev pixel array
-                if tag == 0b00 {
+                if tag == QOI_OP::INDEX {
                     let index = data;
                     let prev = seen_pixels[index as usize];
                     prev_pixel = prev;
@@ -152,8 +166,7 @@ impl QOI {
 
                     raw_pixels.push(prev)
                 }
-                // DIFF chunk
-                else if tag == 0b01 {
+                else if tag == QOI_OP::DIFF {
                     let bias: i16 = 2;
                     let diff_red = ((data >> 4) & 0b11) as i16;
                     let diff_green = ((data >> 2) & 0b11) as i16;
@@ -187,8 +200,7 @@ impl QOI {
 
                     raw_pixels.push(diff_pixel);
                 }
-                // LUMA has 2 bytes of data
-                else if tag == 0b10 {
+                else if tag == QOI_OP::LUMA {
                     let next_byte = chunks.next().unwrap();
 
                     let bias_green: i16 = 32;
@@ -228,7 +240,7 @@ impl QOI {
                 }
                 // RUN chunk for run-length encoding
                 // repeat the previously seen pixel X amount of times
-                else if tag == 0b11 {
+                else if tag == QOI_OP::RUN {
                     let bias = -1;
                     let actual = data as i16 - bias;
 
@@ -244,6 +256,26 @@ impl QOI {
         }
 
         Ok(raw_pixels)
+    }
+
+    /// Parses encoded byte into the proper chunk type
+    fn parse_tag(byte: u8) -> QOI_OP {
+        match byte {
+            // RGB and RGBA chunks takes precedence first
+            0b1111_1110 => QOI_OP::RGB,
+            0b1111_1111 => QOI_OP::RGBA,
+            _ => {
+                let tag = byte >> 6;
+
+                match tag {
+                    0b00 => QOI_OP::INDEX,
+                    0b01 => QOI_OP::DIFF,
+                    0b10 => QOI_OP::LUMA,
+                    0b11 => QOI_OP::RUN,
+                    _ => unreachable!(),
+                }
+            },
+        }
     }
 
     fn hash_index(pixel: &Pixel) -> u8 {
@@ -374,5 +406,26 @@ mod tests {
             QOI::extract_header(&big_height).is_err(),
             "Should fail if height is over 100M pixels"
         );
+    }
+
+    #[test]
+    fn chunk_tags_should_be_parsed_correctly() {
+        let cases = [
+            (0b1111_1110 as u8, QOI_OP::RGB),
+            (0b1111_1111, QOI_OP::RGBA),
+            (0b0000_0001, QOI_OP::INDEX),
+            (0b0100_0001, QOI_OP::DIFF),
+            (0b1000_0001, QOI_OP::LUMA),
+            (0b1100_0001, QOI_OP::RUN),
+        ];
+
+        for (byte, expected) in cases {
+            let actual = QOI::parse_tag(byte);
+
+            assert_eq!(
+                actual, expected,
+                "case failed for {byte:?}"
+            );
+        }
     }
 }
