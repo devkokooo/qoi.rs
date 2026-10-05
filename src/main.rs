@@ -13,6 +13,10 @@ struct Args {
     file_name: PathBuf,
 }
 
+// TODO: decode and encode subcommands
+// decode -i <input.qoi> -o <path/output.png>
+// encode -i <input.png> -o <path/output.qoi>
+// cat input.qoi | qoi-rs.exe decode > out.png
 fn main() {
     let Args { file_name } = Args::parse();
 

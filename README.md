@@ -5,14 +5,14 @@ https://qoiformat.org/
 
 ## Requirements
 
-- [ ] Implement decoder
+- [x] Implement decoder
   - [x] Parse 14-byte header
     - [x] Test: missing magic bytes
     - [x] Test: normal header
     - [x] Test: malformed header
     - [x] Test: empty header
     - [x] Test: massive width & height
-  - [ ] Parse data chunks
+  - [x] Parse data chunks
     - [x] QOI_OP_RGB
     - [x] QOI_OP_RGBA
     - [x] QOI_OP_RUN

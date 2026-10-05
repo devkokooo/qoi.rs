@@ -96,7 +96,7 @@ impl QOI {
         let data = fs::read(path)?;
 
         let header @ QOIHeader {
-            width, height, channels, colorspace
+            width, height, ..
         } = Self::extract_header(&data[..14])?;
 
         let total_pixels = (width * height) as u64;
@@ -307,6 +307,7 @@ impl QOI {
     }
 }
 
+// TODO: test hashing fn, integration tests, split decoder/encoder to own files
 #[cfg(test)]
 mod tests {
     use super::*;
