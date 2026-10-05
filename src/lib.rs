@@ -101,62 +101,59 @@ impl QOI {
 
         let mut raw_pixels: Vec<Pixel> = Vec::new();
 
-        while let Some(chunk) = chunks.next() {
-            let tag = QOI::parse_tag(*chunk);
+        while let Some(byte) = chunks.next() {
+            let tag = QOI::parse_tag(*byte);
 
-            if tag == QOI_OP::RGB {
-                let red = chunks.next().unwrap();
-                let green = chunks.next().unwrap();
-                let blue = chunks.next().unwrap();
+            match tag {
+                QOI_OP::RGB => {
+                    let red = chunks.next().unwrap();
+                    let green = chunks.next().unwrap();
+                    let blue = chunks.next().unwrap();
 
-                let pixel = Pixel {
-                    red: *red,
-                    green: *green,
-                    blue: *blue,
-                    alpha: 255
-                };
-                let index = QOI::hash_index(&pixel);
-                seen_pixels[index as usize] = pixel;
-                prev_pixel = pixel;
-                
-                writeln!(
-                    file,
-                    "RGB [{}, {}, {}]", *red, *green, *blue
-                )?;
+                    let pixel = Pixel {
+                        red: *red,
+                        green: *green,
+                        blue: *blue,
+                        alpha: 255
+                    };
+                    let index = QOI::hash_index(&pixel);
+                    seen_pixels[index as usize] = pixel;
+                    prev_pixel = pixel;
+                    
+                    writeln!(
+                        file,
+                        "RGB [{}, {}, {}]", *red, *green, *blue
+                    )?;
 
-                raw_pixels.push(pixel);
-            }
-            else if tag == QOI_OP::RGBA {
-                let red = chunks.next().unwrap();
-                let green = chunks.next().unwrap();
-                let blue = chunks.next().unwrap();
-                let alpha = chunks.next().unwrap();
+                    raw_pixels.push(pixel);
+                }
+                QOI_OP::RGBA => {
+                    let red = chunks.next().unwrap();
+                    let green = chunks.next().unwrap();
+                    let blue = chunks.next().unwrap();
+                    let alpha = chunks.next().unwrap();
 
-                let pixel = Pixel {
-                    red: *red,
-                    green: *green,
-                    blue: *blue,
-                    alpha: *alpha,
-                };
-                let index = QOI::hash_index(&pixel);
-                seen_pixels[index as usize] = pixel;
-                prev_pixel = pixel;
-                
-                writeln!(
-                    file,
-                    "RGBA [{}, {}, {}, {}]", *red, *green, *blue, *alpha
-                )?;
+                    let pixel = Pixel {
+                        red: *red,
+                        green: *green,
+                        blue: *blue,
+                        alpha: *alpha,
+                    };
+                    let index = QOI::hash_index(&pixel);
+                    seen_pixels[index as usize] = pixel;
+                    prev_pixel = pixel;
+                    
+                    writeln!(
+                        file,
+                        "RGBA [{}, {}, {}, {}]", *red, *green, *blue, *alpha
+                    )?;
 
-                raw_pixels.push(pixel);
-            }
-            else {
-                // THEN start parsing chunks for RUN, INDEX, DIFF, LUMA
-                let data = *chunk & 0b0011_1111;
+                    raw_pixels.push(pixel);
+                }
+                QOI_OP::INDEX => {
+                    let data = *byte & 0b0011_1111;
+                    write!(file, "({:06b}) ", data)?;
 
-                write!(file, "({:06b}) ", data)?;
-
-                // When we find it, use the index to get pixel data from prev pixel array
-                if tag == QOI_OP::INDEX {
                     let index = data;
                     let prev = seen_pixels[index as usize];
                     prev_pixel = prev;
@@ -165,8 +162,12 @@ impl QOI {
                     writeln!(file, "INDEX {index} ➜ Pixel [{red}, {green}, {blue}, {alpha}]")?;
 
                     raw_pixels.push(prev)
+
                 }
-                else if tag == QOI_OP::DIFF {
+                QOI_OP::DIFF => {
+                    let data = *byte & 0b0011_1111;
+                    write!(file, "({:06b}) ", data)?;
+
                     let bias: i16 = 2;
                     let diff_red = ((data >> 4) & 0b11) as i16;
                     let diff_green = ((data >> 2) & 0b11) as i16;
@@ -199,8 +200,12 @@ impl QOI {
                     )?;
 
                     raw_pixels.push(diff_pixel);
+
                 }
-                else if tag == QOI_OP::LUMA {
+                QOI_OP::LUMA => {
+                    let data = *byte & 0b0011_1111;
+                    write!(file, "({:06b}) ", data)?;
+
                     let next_byte = chunks.next().unwrap();
 
                     let bias_green: i16 = 32;
@@ -238,9 +243,10 @@ impl QOI {
 
                     raw_pixels.push(luma_pixel);
                 }
-                // RUN chunk for run-length encoding
-                // repeat the previously seen pixel X amount of times
-                else if tag == QOI_OP::RUN {
+                QOI_OP::RUN => {
+                    let data = *byte & 0b0011_1111;
+                    write!(file, "({:06b}) ", data)?;
+
                     let bias = -1;
                     let actual = data as i16 - bias;
 
@@ -252,7 +258,6 @@ impl QOI {
                     }
                 }
             }
-
         }
 
         Ok(raw_pixels)
