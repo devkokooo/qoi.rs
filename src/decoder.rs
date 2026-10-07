@@ -1,5 +1,5 @@
 use std::{fs, path::Path};
-use crate::{QOI, QOIError, QOIHeader, QoiOp};
+use crate::{MAGIC_BYTES, QOI, QOIError, QOIHeader, QoiOp};
 use crate::{Pixel};
 
 pub struct DecodedImage {
@@ -98,26 +98,6 @@ impl QOI {
         Ok(DecodedImage { header, raw_pixels })
     }
 
-    /// Parses encoded byte into the proper chunk type
-    fn parse_tag(byte: u8) -> QoiOp {
-        match byte {
-            // RGB and RGBA chunks takes precedence first
-            0b1111_1110 => QoiOp::RGB,
-            0b1111_1111 => QoiOp::RGBA,
-            _ => {
-                let tag = byte >> 6;
-
-                match tag {
-                    0b00 => QoiOp::INDEX,
-                    0b01 => QoiOp::DIFF,
-                    0b10 => QoiOp::LUMA,
-                    0b11 => QoiOp::RUN,
-                    _ => unreachable!(),
-                }
-            },
-        }
-    }
-
     fn extract_pixel_from_diff_chunk(curr_byte: u8, prev_pixel: Pixel) -> Pixel {
         let bias = 2;
         let diff_red = (curr_byte >> 4) & 0b11;
@@ -179,8 +159,6 @@ impl QOI {
 
         // Verify QOI header
         // If magic bytes don't read "qoif", fail with error
-        const MAGIC_BYTES: [u8; 4] = [0x71, 0x6f, 0x69, 0x66];
-
         if &raw_data[..4] != &MAGIC_BYTES {
             return Err(QOIError::IncorrectMagicBytes);
         }

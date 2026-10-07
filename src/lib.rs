@@ -6,6 +6,8 @@ pub mod encoder;
 
 pub struct QOI;
 
+pub const MAGIC_BYTES: [u8; 4] = [0x71, 0x6f, 0x69, 0x66];
+
 #[derive(Debug)]
 pub struct QOIHeader {
     pub width: u32,
@@ -43,15 +45,15 @@ impl std::error::Error for QOIError {}
 
 #[derive(Debug, PartialEq)]
 pub enum QoiOp {
-    RGB,
-    RGBA,
-    INDEX,
-    DIFF,
-    LUMA,
-    RUN,
+    RGB = 0b1111_1110,
+    RGBA = 0b1111_1111,
+    INDEX = 0b00,
+    DIFF = 0b01,
+    LUMA = 0b10,
+    RUN = 0b11,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Pixel {
     pub red: u8,
     pub green: u8,
@@ -99,6 +101,26 @@ impl QOI {
         ).0;
 
         hash % 64
+    }
+
+    /// Parses encoded byte into the proper chunk type
+    fn parse_tag(byte: u8) -> QoiOp {
+        match byte {
+            // RGB and RGBA chunks takes precedence first
+            0b1111_1110 => QoiOp::RGB,
+            0b1111_1111 => QoiOp::RGBA,
+            _ => {
+                let tag = byte >> 6;
+
+                match tag {
+                    0b00 => QoiOp::INDEX,
+                    0b01 => QoiOp::DIFF,
+                    0b10 => QoiOp::LUMA,
+                    0b11 => QoiOp::RUN,
+                    _ => unreachable!(),
+                }
+            },
+        }
     }
 }
 

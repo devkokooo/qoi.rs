@@ -19,12 +19,12 @@ https://qoiformat.org/
     - [x] QOI_OP_INDEX
     - [x] QOI_OP_DIFF
     - [x] QOI_OP_LUMA
-- [ ] Implement encoder
-  - [ ] Write 14-byte header
-  - [ ] Write data chunks
-    - [ ] QOI_OP_RGB
-    - [ ] QOI_OP_RGBA
-    - [ ] QOI_OP_RUN
-    - [ ] QOI_OP_INDEX
-    - [ ] QOI_OP_DIFF
-    - [ ] QOI_OP_LUMA
+- [x] Implement encoder
+  - [x] Write 14-byte header
+  - [x] Write data chunks
+    - [x] QOI_OP_RGB
+    - [x] QOI_OP_RGBA
+    - [x] QOI_OP_RUN
+    - [x] QOI_OP_INDEX
+    - [x] QOI_OP_DIFF
+    - [x] QOI_OP_LUMA
