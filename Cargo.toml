@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
-image  = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+
+[lints.clippy]
+pedantic = "warn"

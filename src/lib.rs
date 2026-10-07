@@ -1,5 +1,5 @@
-use std::{fmt, num::Wrapping};
 use std::io;
+use std::{fmt, num::Wrapping};
 
 pub mod decoder;
 pub mod encoder;
@@ -13,7 +13,7 @@ pub struct QOIHeader {
     pub width: u32,
     pub height: u32,
     pub channels: u8,
-    pub colorspace: u8
+    pub colorspace: u8,
 }
 
 #[derive(Debug)]
@@ -65,40 +65,51 @@ impl Pixel {
     #[must_use]
     pub const fn zeroed() -> Self {
         Self {
-            red: 0, green: 0, blue: 0, alpha: 0
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 0,
         }
     }
 
     #[must_use]
     pub const fn black() -> Self {
         Self {
-            red: 0, green: 0, blue: 0, alpha: 255,
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
         }
     }
 
     #[must_use]
     pub const fn white() -> Self {
         Self {
-            red: 255, green: 255, blue: 255, alpha: 255,
+            red: 255,
+            green: 255,
+            blue: 255,
+            alpha: 255,
         }
     }
 }
 
 impl QOI {
+    #[must_use]
     pub fn hash_index(pixel: &Pixel) -> u8 {
-        let Pixel { red, green, blue, alpha } = pixel;
+        let Pixel {
+            red,
+            green,
+            blue,
+            alpha,
+        } = pixel;
 
         let red = Wrapping(*red);
         let green = Wrapping(*green);
         let blue = Wrapping(*blue);
         let alpha = Wrapping(*alpha);
 
-        let hash = (
-            red * Wrapping(3) +
-            green * Wrapping(5) +
-            blue * Wrapping(7) +
-            alpha * Wrapping(11)
-        ).0;
+        let hash =
+            (red * Wrapping(3) + green * Wrapping(5) + blue * Wrapping(7) + alpha * Wrapping(11)).0;
 
         hash % 64
     }
@@ -119,7 +130,7 @@ impl QOI {
                     0b11 => QoiOp::RUN,
                     _ => unreachable!(),
                 }
-            },
+            }
         }
     }
 }
@@ -134,7 +145,15 @@ mod tests {
             (Pixel::zeroed(), 0),
             (Pixel::black(), 53),
             (Pixel::white(), 38),
-            (Pixel { red: 1, green: 1, blue: 1, alpha: 1 }, 26),
+            (
+                Pixel {
+                    red: 1,
+                    green: 1,
+                    blue: 1,
+                    alpha: 1,
+                },
+                26,
+            ),
         ];
 
         for (pixel, expected_index) in cases {

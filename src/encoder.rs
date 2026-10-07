@@ -6,9 +6,9 @@ pub struct EncodedImage {
 }
 
 struct Diff {
-    diff_red: u8,
-    diff_green: u8,
-    diff_blue: u8,
+    red: u8,
+    green: u8,
+    blue: u8,
 }
 
 impl Diff {
@@ -19,38 +19,36 @@ impl Diff {
 
     fn new(prev: Pixel, curr: Pixel) -> Self {
         Self {
-            diff_red: curr.red.wrapping_sub(prev.red),
-            diff_green: curr.green.wrapping_sub(prev.green),
-            diff_blue: curr.blue.wrapping_sub(prev.blue),
+            red: curr.red.wrapping_sub(prev.red),
+            green: curr.green.wrapping_sub(prev.green),
+            blue: curr.blue.wrapping_sub(prev.blue),
         }
     }
 
     /// If I can't fit a color in 2 bits, it is not representable
     fn is_representable(&self) -> bool {
-        (self.biased_red() & Self::MASK) == 0 &&
-        (self.biased_green() & Self::MASK) == 0 &&
-        (self.biased_blue() & Self::MASK) == 0
+        (self.biased_red() & Self::MASK) == 0
+            && (self.biased_green() & Self::MASK) == 0
+            && (self.biased_blue() & Self::MASK) == 0
     }
 
     fn biased_red(&self) -> u8 {
-        self.diff_red.wrapping_add(Self::BIAS)
+        self.red.wrapping_add(Self::BIAS)
     }
 
     fn biased_green(&self) -> u8 {
-        self.diff_green.wrapping_add(Self::BIAS)
+        self.green.wrapping_add(Self::BIAS)
     }
 
     fn biased_blue(&self) -> u8 {
-        self.diff_blue.wrapping_add(Self::BIAS)
+        self.blue.wrapping_add(Self::BIAS)
     }
 
     fn to_bits(&self) -> Option<[u8; Self::CHUNK_SIZE]> {
-        self.is_representable().then_some([
-            (Self::TAG as u8) << 6
+        self.is_representable().then_some([(Self::TAG as u8) << 6
             | self.biased_red() << 4
             | self.biased_green() << 2
-            | self.biased_blue()
-        ])
+            | self.biased_blue()])
     }
 }
 
@@ -79,9 +77,9 @@ impl Luma {
     }
 
     fn is_representable(&self) -> bool {
-        (self.biased_green() & Self::MASK_GREEN) == 0 &&
-        (self.biased_red() & Self::MASK_RB) == 0 &&
-        (self.biased_blue() & Self::MASK_RB) == 0
+        (self.biased_green() & Self::MASK_GREEN) == 0
+            && (self.biased_red() & Self::MASK_RB) == 0
+            && (self.biased_blue() & Self::MASK_RB) == 0
     }
 
     fn biased_green(&self) -> u8 {
@@ -99,7 +97,7 @@ impl Luma {
     fn to_bits(&self) -> Option<[u8; Self::CHUNK_SIZE]> {
         self.is_representable().then_some([
             (Self::TAG as u8) << 6 | self.biased_green(),
-            self.biased_red() << 4 | self.biased_blue()
+            self.biased_red() << 4 | self.biased_blue(),
         ])
     }
 }
@@ -111,14 +109,25 @@ impl QOI {
     /// 3. Iterate through image pixels as bytes
     /// 4. Encode pixels as QOI chunks
     /// 5. Finish encoding with byte stream end of 7 0x00 and 1 0x01
-    pub fn encode(bytes: impl IntoIterator<Item = [u8; 4]>, header: QOIHeader) -> Result<EncodedImage, QOIError> {
+    ///
+    /// # Errors
+    /// TODO: sometimes it errors
+    pub fn encode(
+        bytes: impl IntoIterator<Item = [u8; 4]>,
+        header: QOIHeader,
+    ) -> Result<EncodedImage, QOIError> {
         let mut encoded: Vec<u8> = Vec::new();
 
         // Encode magic bytes "qoif" (4 bytes)
         encoded.extend(MAGIC_BYTES);
 
         // Encode header data
-        let QOIHeader { width, height, channels, colorspace } = header;
+        let QOIHeader {
+            width,
+            height,
+            channels,
+            colorspace,
+        } = header;
         encoded.extend(width.to_be_bytes());
         encoded.extend(height.to_be_bytes());
         encoded.push(channels);
@@ -127,25 +136,27 @@ impl QOI {
         let mut seen_pixels: [Pixel; 64] = [Pixel::zeroed(); 64];
 
         let mut prev_pixel = Pixel {
-            red: 0, green: 0, blue: 0, alpha: 255,
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
         };
 
         // Iterate image pixels and encode them to QOI chunks
 
         let mut run: Option<u8> = None;
-        let mut total_run = 0;
-        let mut total_index = 0;
-        let mut total_diff = 0;
-        let mut total_luma = 0;
-        let mut total_rgb = 0;
-        let mut total_rgba = 0;
 
         for [red, green, blue, alpha] in bytes {
-            let curr_pixel = Pixel { red, green, blue, alpha };
+            let curr_pixel = Pixel {
+                red,
+                green,
+                blue,
+                alpha,
+            };
 
             // 1ST CASE: unique pixel color, first time seeing
             // create RGB/RGBA chunk, then save in seen_pixels arr
-            
+
             // 2ND CASE: color seen before & NOT same as prev pixel
             // only 1 occurrence, create INDEX chunk
 
@@ -153,13 +164,14 @@ impl QOI {
             // 2+ occurrence, create RUN chunk
 
             // Precedence: RUN, INDEX, DIFF, LUMA, RGB, RGBA
-            
+
             // multiple RUN chunks
-            if let Some(rl) = run && rl >= 62 {
+            if let Some(rl) = run
+                && rl >= 62
+            {
                 let chunk = Self::create_run_chunk(rl);
                 encoded.push(chunk);
                 run = None;
-                total_run += 1;
             }
 
             if curr_pixel == prev_pixel {
@@ -175,7 +187,6 @@ impl QOI {
                 let chunk = Self::create_run_chunk(rl);
                 encoded.push(chunk);
                 run = None;
-                total_run += 1;
             }
 
             let index = Self::hash_index(&curr_pixel);
@@ -185,7 +196,6 @@ impl QOI {
                 let chunk = Self::create_index_chunk(index);
                 encoded.push(chunk);
                 prev_pixel = curr_pixel;
-                total_index += 1;
                 continue;
             }
 
@@ -195,13 +205,15 @@ impl QOI {
             if prev_pixel.alpha != curr_pixel.alpha {
                 let tag = QoiOp::RGBA as u8;
                 let Pixel {
-                    red, green, blue, alpha
+                    red,
+                    green,
+                    blue,
+                    alpha,
                 } = curr_pixel;
-    
+
                 let chunk = [tag, red, green, blue, alpha];
                 encoded.extend(chunk);
                 prev_pixel = curr_pixel;
-                total_rgba += 1;
                 continue;
             }
 
@@ -210,50 +222,40 @@ impl QOI {
             if let Some(diff) = Diff::new(prev_pixel, curr_pixel).to_bits() {
                 encoded.extend(diff);
                 prev_pixel = curr_pixel;
-                total_diff += 1;
                 continue;
             }
 
             if let Some(luma) = Luma::new(prev_pixel, curr_pixel).to_bits() {
                 encoded.extend(luma);
                 prev_pixel = curr_pixel;
-                total_luma += 1;
                 continue;
             }
 
             // RGB if alpha is same as prev pixel
             let tag = QoiOp::RGB as u8;
             let Pixel {
-                red, green, blue, alpha: _
+                red,
+                green,
+                blue,
+                alpha: _,
             } = curr_pixel;
 
             let chunk = [tag, red, green, blue];
             encoded.extend(chunk);
             prev_pixel = curr_pixel;
-            total_rgb += 1;
         }
 
         // if final pixels are RUN
         if let Some(rl) = run {
             encoded.push(Self::create_run_chunk(rl));
-            total_run += 1;
         }
 
         // End stream bytes
-        encoded.extend([
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x01,
-        ]);
-
-        dbg!(
-            total_run, total_index,
-            total_diff, total_luma,
-            total_rgb, total_rgba,
-        );
+        encoded.extend([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]);
 
         Ok(EncodedImage {
             header,
-            bytes: encoded
+            bytes: encoded,
         })
     }
 
@@ -279,8 +281,8 @@ impl QOI {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::{assert_eq, assert_ne};
     use super::*;
+    use pretty_assertions::{assert_eq, assert_ne};
 
     #[test]
     fn chunk_encode_run_length() {
@@ -296,8 +298,7 @@ mod tests {
         ];
         let two_repeat: [u8; 12] = [
             0, 0, 0, 255, // RGBA
-            0, 0, 0, 255,
-            0, 0, 0, 255, // RUN [2]
+            0, 0, 0, 255, 0, 0, 0, 255, // RUN [2]
         ];
         let seen_before_no_repeat: [u8; 12] = [
             0, 0, 0, 255, // RGBA
@@ -308,19 +309,19 @@ mod tests {
             0, 0, 0, 255, // RGBA
             255, 255, 255, 255, // RGBA
             0, 0, 0, 255, // INDEX
-            0, 0, 0, 255,
-            0, 0, 0, 255, // RUN [2]
+            0, 0, 0, 255, 0, 0, 0, 255, // RUN [2]
         ];
 
         let cases: [(&[u8], &'static [QoiOp]); 4] = [
             (&all_unique, &[QoiOp::RGBA, QoiOp::RGBA, QoiOp::RGBA]),
             (&one_repeat, &[QoiOp::RGBA, QoiOp::RUN, QoiOp::RGBA]),
             (&two_repeat, &[QoiOp::RGBA, QoiOp::RUN]),
-            (&seen_before_no_repeat, &[QoiOp::RGBA, QoiOp::RGBA, QoiOp::INDEX]),
+            (
+                &seen_before_no_repeat,
+                &[QoiOp::RGBA, QoiOp::RGBA, QoiOp::INDEX],
+            ),
         ];
 
-        for (case, expected) in cases {
-
-        }
+        for (case, expected) in cases {}
     }
 }

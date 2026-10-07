@@ -1,6 +1,6 @@
-use std::{fs, path::Path};
+use crate::Pixel;
 use crate::{MAGIC_BYTES, QOI, QOIError, QOIHeader, QoiOp};
-use crate::{Pixel};
+use std::{fs, path::Path};
 
 pub struct DecodedImage {
     pub header: QOIHeader,
@@ -14,20 +14,27 @@ impl QOI {
     /// 3. Parse data chunks
     /// 4. Convert data chunks into pixel values
     /// 5. Populate raw pixel vector
-    /// 6. Return raw pixels 
+    /// 6. Return raw pixels
+    ///
+    /// # Panics
+    /// TODO: sometimes it panics
+    ///
+    /// # Errors
+    /// TODO: sometimes it errors
     pub fn decode(path: impl AsRef<Path>) -> Result<DecodedImage, QOIError> {
         let data = fs::read(path)?;
 
-        let header @ QOIHeader {
-            width, height, ..
-        } = Self::extract_header(&data[..14])?;
+        let header @ QOIHeader { width, height, .. } = Self::extract_header(&data[..14])?;
 
-        let total_pixels = (width * height) as u64;
+        let total_pixels = u64::from(width * height);
 
         let mut seen_pixels: [Pixel; 64] = [Pixel::zeroed(); 64];
 
         let mut prev_pixel = Pixel {
-            red: 0, green: 0, blue: 0, alpha: 255,
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
         };
 
         // Start parsing each of the possible QOI chunks
@@ -45,32 +52,24 @@ impl QOI {
             let tag = QOI::parse_tag(*byte);
 
             let curr_pixel = match tag {
-                QoiOp::RGB => {
-                    let pixel = Pixel {
-                        red: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        green: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        alpha: prev_pixel.alpha,
-                    };
-                    pixel
-                }
-                QoiOp::RGBA => {
-                    let pixel = Pixel {
-                        red: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        green: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                        alpha: *chunks.next().ok_or(QOIError::MalformedFile)?,
-                    };
-                    pixel
-                }
+                QoiOp::RGB => Pixel {
+                    red: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                    green: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                    blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                    alpha: prev_pixel.alpha,
+                },
+                QoiOp::RGBA => Pixel {
+                    red: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                    green: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                    blue: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                    alpha: *chunks.next().ok_or(QOIError::MalformedFile)?,
+                },
                 QoiOp::INDEX => {
                     let index = *byte & 0b0011_1111;
-                    let seen = seen_pixels[index as usize];
-                    seen
+
+                    seen_pixels[index as usize]
                 }
-                QoiOp::DIFF => {
-                    QOI::extract_pixel_from_diff_chunk(*byte, prev_pixel)
-                }
+                QoiOp::DIFF => QOI::extract_pixel_from_diff_chunk(*byte, prev_pixel),
                 QoiOp::LUMA => {
                     let next_byte = chunks.next().unwrap();
 
@@ -108,18 +107,22 @@ impl QOI {
         let dg = diff_green.wrapping_sub(bias);
         let db = diff_blue.wrapping_sub(bias);
 
-        let Pixel { red, green, blue, alpha } = prev_pixel;
+        let Pixel {
+            red,
+            green,
+            blue,
+            alpha,
+        } = prev_pixel;
         let curr_red = dr.wrapping_add(red);
         let curr_green = dg.wrapping_add(green);
         let curr_blue = db.wrapping_add(blue);
 
-        let diff_pixel = Pixel {
+        Pixel {
             red: curr_red,
             green: curr_green,
             blue: curr_blue,
-            alpha
-        };
-        diff_pixel
+            alpha,
+        }
     }
 
     fn extract_pixel_from_luma_chunk(first_byte: u8, second_byte: u8, prev_pixel: Pixel) -> Pixel {
@@ -127,26 +130,30 @@ impl QOI {
         let bias_rb = 8;
 
         let dg = first_byte & 0b0011_1111; // 6 bits
-        let dr_dg = second_byte >> 4; // 4 bits
-        let db_dg = second_byte & 0b1111; // 4 bits
+        let red_green_diff = second_byte >> 4; // 4 bits
+        let blue_green_diff = second_byte & 0b1111; // 4 bits
 
         let dg = dg.wrapping_sub(bias_green);
-        let dr_dg = dr_dg.wrapping_sub(bias_rb);
-        let db_dg = db_dg.wrapping_sub(bias_rb);
+        let red_green_diff = red_green_diff.wrapping_sub(bias_rb);
+        let blue_green_diff = blue_green_diff.wrapping_sub(bias_rb);
 
-        let Pixel { red, green, blue, alpha } = prev_pixel;
+        let Pixel {
+            red,
+            green,
+            blue,
+            alpha,
+        } = prev_pixel;
 
         let curr_green = dg.wrapping_add(green);
-        let curr_red = dr_dg.wrapping_add(dg).wrapping_add(red);
-        let curr_blue = db_dg.wrapping_add(dg).wrapping_add(blue);
+        let curr_red = red_green_diff.wrapping_add(dg).wrapping_add(red);
+        let curr_blue = blue_green_diff.wrapping_add(dg).wrapping_add(blue);
 
-        let luma_pixel = Pixel {
+        Pixel {
             red: curr_red,
             green: curr_green,
             blue: curr_blue,
-            alpha
-        };
-        luma_pixel
+            alpha,
+        }
     }
 
     // Read the header byte-by-byte (every u8)
@@ -159,7 +166,7 @@ impl QOI {
 
         // Verify QOI header
         // If magic bytes don't read "qoif", fail with error
-        if &raw_data[..4] != &MAGIC_BYTES {
+        if raw_data[..4] != MAGIC_BYTES {
             return Err(QOIError::IncorrectMagicBytes);
         }
 
@@ -169,8 +176,8 @@ impl QOI {
         // use to_be_bytes to convert
         let width = &raw_data[4..=7];
         let height = &raw_data[8..=11];
-        let channels = *&raw_data[12];
-        let colorspace = *&raw_data[13];
+        let channels = raw_data[12];
+        let colorspace = raw_data[13];
 
         // file already stored as BE
         let width = u32::from_be_bytes(width.try_into().unwrap());
@@ -181,7 +188,10 @@ impl QOI {
         }
 
         Ok(QOIHeader {
-            width, height, channels, colorspace
+            width,
+            height,
+            channels,
+            colorspace,
         })
     }
 }
@@ -216,7 +226,7 @@ mod tests {
             0x71, 0x6f, 0x69, 0x66, // qoif
             0x01, 0x01, 0x01, 0x01, // width
             0x01, 0x01, 0x01, 0x01, // height
-            0x01, 0x01 // channels, colorspace
+            0x01, 0x01, // channels, colorspace
         ];
 
         assert!(
@@ -231,14 +241,14 @@ mod tests {
             0x71, 0x6f, 0x69, 0x66, // qoif
             0x01, 0xE1, 0xF5, 0x05, // width, 100_000_001
             0x01, 0x01, 0x01, 0x01, // height
-            0x01, 0x01 // channels, colorspace
+            0x01, 0x01, // channels, colorspace
         ];
 
         let big_height = [
             0x71, 0x6f, 0x69, 0x66, // qoif
             0x01, 0x01, 0x01, 0x01, // width
             0x01, 0xE1, 0xF5, 0x05, // height, 100_000_001
-            0x01, 0x01 // channels, colorspace
+            0x01, 0x01, // channels, colorspace
         ];
 
         assert!(
@@ -255,7 +265,7 @@ mod tests {
     #[test]
     fn chunk_tags_should_be_parsed_correctly() {
         let cases = [
-            (0b1111_1110 as u8, QoiOp::RGB),
+            (0b1111_1110_u8, QoiOp::RGB),
             (0b1111_1111, QoiOp::RGBA),
             (0b0000_0001, QoiOp::INDEX),
             (0b0100_0001, QoiOp::DIFF),
@@ -266,10 +276,7 @@ mod tests {
         for (byte, expected) in cases {
             let actual = QOI::parse_tag(byte);
 
-            assert_eq!(
-                actual, expected,
-                "case failed for {byte:?}"
-            );
+            assert_eq!(actual, expected, "case failed for {byte:?}");
         }
     }
 
@@ -278,28 +285,78 @@ mod tests {
         let cases = [
             (
                 0b0110_1010_u8, // DIFF [2-2 = 0, 2-2 = 0, 2-2 = 0]
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
             ),
             (
                 0b0111_1111_u8, // DIFF [3-2 = 1, 3-2 = 1, 3-2 = 1]
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 1, green: 1, blue: 1, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 1,
+                    green: 1,
+                    blue: 1,
+                    alpha: 255,
+                },
             ),
             (
                 0b0101_0101_u8, // DIFF [1-2 = -1, 1-2 = -1, 1-2 = -1]
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 255, green: 255, blue: 255, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 255,
+                    green: 255,
+                    blue: 255,
+                    alpha: 255,
+                },
             ),
             (
                 0b0100_0000_u8, // DIFF [0-2 = -2, 0-2 = -2, 0-2 = -2]
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 254, green: 254, blue: 254, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 254,
+                    green: 254,
+                    blue: 254,
+                    alpha: 255,
+                },
             ),
             (
                 0b0101_1011_u8, // DIFF [1-2 = -1, 2-2 = 0, 3-2 = 1]
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 255, green: 0, blue: 1, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 255,
+                    green: 0,
+                    blue: 1,
+                    alpha: 255,
+                },
             ),
         ];
 
@@ -319,32 +376,82 @@ mod tests {
             (
                 0b1010_0000_u8, // LUMA [32-32 = 0, 8-8 = 0, 8-8 = 0]
                 0b1000_1000_u8,
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
             ),
             (
                 0b1000_0000_u8, // LUMA [0-32 = -32, 8-8 = 0, 8-8 = 0]
                 0b1000_1000_u8,
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 224, green: 224, blue: 224, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 224,
+                    green: 224,
+                    blue: 224,
+                    alpha: 255,
+                },
             ),
             (
                 0b1011_1111_u8, // LUMA [63-32 = 31, 8-8 = 0, 8-8 = 0]
                 0b1000_1000_u8,
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 31, green: 31, blue: 31, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 31,
+                    green: 31,
+                    blue: 31,
+                    alpha: 255,
+                },
             ),
             (
                 0b1001_1111_u8, // LUMA [31-32 = -1, 8-8 = 0, 9-8 = 1]
                 0b1000_1001_u8,
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 255, green: 255, blue: 0, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 255,
+                    green: 255,
+                    blue: 0,
+                    alpha: 255,
+                },
             ),
             (
                 0b1001_1111_u8, // LUMA [31-32 = -1, 7-8 = -1, 9-8 = 1]
                 0b0111_1001_u8,
-                Pixel { red: 0, green: 0, blue: 0, alpha: 255 },
-                Pixel { red: 254, green: 255, blue: 0, alpha: 255 },
+                Pixel {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 255,
+                },
+                Pixel {
+                    red: 254,
+                    green: 255,
+                    blue: 0,
+                    alpha: 255,
+                },
             ),
         ];
 
